@@ -24,7 +24,7 @@ _orig_plotly_chart = _DG.plotly_chart
 
 def _plotly_chart_large(self, fig, *args, **kwargs):
     if isinstance(fig, go.Figure):
-        fig.update_layout(font=dict(size=14, family="Cera Pro, Helvetica Neue, Arial, sans-serif", color=INK),
+        fig.update_layout(font=dict(size=14, family="Figtree, Helvetica Neue, Arial, sans-serif", color=INK),
                           legend=dict(font=dict(size=14)), title_font=dict(size=16))
         fig.update_xaxes(tickfont=dict(size=15), title_font=dict(size=14))
         fig.update_yaxes(tickfont=dict(size=14), title_font=dict(size=14))
