@@ -14,9 +14,10 @@ import streamlit as st
 
 from pages.park_page import (SS_RED, INK, GREY, _days, _load, _day_label, _run_plot, _run_map, _gnss_day,
                              _jumps_map, _quality, _jump_label)
+from utils import brand
 
-DAY_COLOURS = [INK, SS_RED, GREY, "#6b8fb5", "#c9a227", "#5b8c5a", "#8e5ea2", "#d17a3a"]
-ATHLETE_COLOURS = px.colors.qualitative.Dark24
+DAY_COLOURS = [INK, SS_RED, GREY, "#39C3D4", "#8B0E13", "#1E8A97", "#F28C96", "#C00418"]
+ATHLETE_COLOURS = brand.SEQ
 KICKER_COLOURS = {"K1": INK, "K2": SS_RED, "K3": GREY}
 
 METRICS = {  # label -> (column, unit, format)
@@ -205,27 +206,27 @@ def _dev_chart(summ: pd.DataFrame, title_suffix: str = ""):
 
 CARD_CSS = """
 <style>
-.tc-card { background:#fff; border:1px solid #e4dfdc; border-radius:14px; margin-bottom:6px; overflow:hidden; }
+.tc-card { background:#fff; border:1px solid #E3E3E3; border-radius:14px; margin-bottom:6px; overflow:hidden; }
 .tc-head { display:flex; align-items:center; gap:14px; padding:16px 20px; border-bottom:1px solid #eee; }
-.tc-av { width:46px; height:46px; border-radius:10px; background:#3a3a3a; color:#fff; display:flex; align-items:center;
+.tc-av { width:46px; height:46px; border-radius:10px; background:#3E3E3E; color:#fff; display:flex; align-items:center;
          justify-content:center; font-weight:700; font-size:17px; letter-spacing:.03em; }
-.tc-name { font-size:21px; font-weight:700; color:#2b2b2b; }
+.tc-name { font-size:21px; font-weight:700; color:#3E3E3E; }
 .tc-body { padding:14px 20px 18px; }
 .tc-stance { margin-left:auto; font-size:12px; font-weight:700; letter-spacing:.06em; text-transform:uppercase;
-             color:#5f5f5f; background:#f3efed; padding:4px 10px; border-radius:999px; }
+             color:#6E6E6E; background:#F4F4F4; padding:4px 10px; border-radius:999px; }
 .tc-sub { display:flex; align-items:center; gap:10px; margin-bottom:12px; }
-.tc-sub b { font-size:13px; letter-spacing:.08em; color:#2b2b2b; }
-.tc-badge { background:#fdeef0; color:#b80016; font-size:12px; font-weight:700; letter-spacing:.05em; padding:3px 9px;
+.tc-sub b { font-size:13px; letter-spacing:.08em; color:#3E3E3E; }
+.tc-badge { background:#FDEDEF; color:#C00418; font-size:12px; font-weight:700; letter-spacing:.05em; padding:3px 9px;
             border-radius:999px; }
 .tc-grid { display:grid; grid-template-columns:repeat(4, 1fr); gap:10px; }
-.tc-tile { background:#f7f5f4; border:1px solid #ebe6e3; border-radius:10px; padding:10px 12px; min-height:92px; }
-.tc-tile.best { background:#fdeef0; border-color:#f3b8c0; }
-.tc-v { font-size:22px; font-weight:700; color:#2b2b2b; line-height:1.15; }
-.tc-tile.best .tc-v { color:#E3001B; }
-.tc-l { font-size:13px; color:#5f5f5f; margin-top:2px; }
-.tc-s { font-size:12px; color:#5f5f5f; margin-top:4px; }
-.tc-s b { color:#2b2b2b; }
-.tc-flag { font-size:10px; font-weight:700; letter-spacing:.06em; color:#E3001B; text-transform:uppercase; }
+.tc-tile { background:#F7F7F7; border:1px solid #E8E8E8; border-radius:10px; padding:10px 12px; min-height:92px; }
+.tc-tile.best { background:#FDEDEF; border-color:#F5B3BB; }
+.tc-v { font-size:22px; font-weight:700; color:#3E3E3E; line-height:1.15; }
+.tc-tile.best .tc-v { color:#E2001A; }
+.tc-l { font-size:13px; color:#6E6E6E; margin-top:2px; }
+.tc-s { font-size:12px; color:#6E6E6E; margin-top:4px; }
+.tc-s b { color:#3E3E3E; }
+.tc-flag { font-size:10px; font-weight:700; letter-spacing:.06em; color:#E2001A; text-transform:uppercase; }
 @media (max-width: 900px) { .tc-grid { grid-template-columns:repeat(2, 1fr); } }
 </style>
 """
