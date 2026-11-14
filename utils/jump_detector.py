@@ -1,0 +1,233 @@
+"""
+Sprunganalyse — verwendet die originale sensor_lib Pipeline.
+"""
+import numpy as np
+import pandas as pd
+import sys, os
+sys.path.insert(0, os.path.dirname(__file__))
+
+import sensor_lib
+
+SAMPLE_RATE = 200.0
+LANDING_WINDOW_N = 51   # 0.25 s bei 200 Hz (inkl. Landungspunkt)
+
+
+def detect_vertical_axis(df: pd.DataFrame) -> str:
+    """Bestimmt die vertikale Achse (accX oder accY) anhand des Medians."""
+    med_x = abs(df['accX [g]'].median())
+    med_y = abs(df['accY [g]'].median())
+    return 'accX [g]' if med_x > med_y else 'accY [g]'
+
+
+def preprocess_imu(df: pd.DataFrame) -> pd.DataFrame:
+    """Dreht Sensor falls nötig und fügt accRes hinzu. Erwartet originale AdMos-Spaltennamen."""
+    df = df.copy()
+    axis_vert = detect_vertical_axis(df)
+    if df[axis_vert].median() < 0:
+        df = sensor_lib.rotate_sensor_data(df, 'z')
+    df = sensor_lib.add_resultant_acc(df)
+    return df
+
+
+def detect_jumps(df_raw: pd.DataFrame,
+                 th_core_accVert: float = 0.60,
+                 th_core_accRes: float = 0.70,
+                 th_crossing: float = 1.0,
+                 min_duration_s: float = 1.2,
+                 window_size: int = 10) -> pd.DataFrame:
+    """
+    Erkennt Sprünge mit sensor_lib.detect_jumps_snow.
+    Erwartet DataFrame mit originalen AdMos-Spaltennamen oder preprocessed df (mit accRes [g]).
+    """
+    df = df_raw.copy()
+
+    if "accRes [g]" not in df.columns:
+        df = preprocess_imu(df)
+
+    axis_vert = detect_vertical_axis(df)
+
+    return sensor_lib.detect_jumps_snow(
+        df,
+        axis_vert=axis_vert,
+        th_core_accVert=th_core_accVert,
+        th_core_accRes=th_core_accRes,
+        th_crossing=th_crossing,
+        min_duration_s=min_duration_s,
+        window_size=window_size,
+    )
+
+
+def compute_rotation(df_raw: pd.DataFrame, takeoff_idx: int, landing_idx: int) -> dict:
+    """
+    Schätzt Rotationen während der Flugphase aus Gyroskopdaten.
+    Methode: PCA auf Gyro-Daten der Flugphase → dominante Spin-Achse bestimmen,
+    dann Projektion und Integration entlang dieser Achse.
+    Vorteil: Körperneigungen und Vorwärtskippen werden herausgefiltert.
+    """
+    gyr_cols = [c for c in ["gyrX [dps]", "gyrY [dps]", "gyrZ [dps]"] if c in df_raw.columns]
+    if len(gyr_cols) < 3 or landing_idx <= takeoff_idx:
+        return {"rotations": None, "direction": None, "total_deg": None}
+
+    i0 = max(0, takeoff_idx)
+    i1 = min(len(df_raw) - 1, landing_idx)
+    seg = df_raw.iloc[i0:i1 + 1]
+    G = seg[gyr_cols].values  # shape (n, 3)
+
+    if len(G) < 5:
+        return {"rotations": None, "direction": None, "total_deg": None}
+
+    dt = 1.0 / SAMPLE_RATE
+
+    # Schritt 1: Spin-Achse = Richtung des mittleren Gyro-Vektors
+    # (dominante Drehachse während der Flugphase)
+    mean_gyr = G.mean(axis=0)
+    norm = np.linalg.norm(mean_gyr)
+    if norm < 1.0:
+        # Zu wenig Rotation — kein erkennbarer Spin
+        return {"rotations": 0.0, "direction": "—", "total_deg": 0.0}
+    spin_axis = mean_gyr / norm  # Einheitsvektor
+
+    # Schritt 2: PCA auf zentrierten Daten für Feinkorrektur der Achse
+    # (kombiniert mittlere Richtung mit Hauptvarianz-Richtung)
+    G_centered = G - mean_gyr
+    if G_centered.std() > 0.5:
+        cov = np.cov(G_centered.T)
+        eigenvalues, eigenvectors = np.linalg.eigh(cov)
+        pca_axis = eigenvectors[:, np.argmax(eigenvalues)]
+        # Vorzeichen der PCA-Achse an mittleren Vektor angleichen
+        if np.dot(pca_axis, spin_axis) < 0:
+            pca_axis = -pca_axis
+        # Gewichtete Kombination: 70% Mittelwert, 30% PCA
+        spin_axis = 0.7 * spin_axis + 0.3 * pca_axis
+        spin_axis = spin_axis / np.linalg.norm(spin_axis)
+
+    # Schritt 3: Projektion auf Spin-Achse und Integration
+    projected = G @ spin_axis
+    total_deg = abs(float(np.sum(np.abs(projected)) * dt))  # Gesamtrotation
+
+    # Richtung: Vorzeichen der dominanten Original-Achse (nicht der projizierten)
+    # → robust gegen Vorzeichenambiguität des Eigenvektors
+    dominant_axis_idx = np.argmax(np.abs(mean_gyr))
+    net_dominant = float(np.sum(G[:, dominant_axis_idx]) * dt)
+    direction = "links" if net_dominant > 0 else "rechts"
+
+    # Auf nächstes 0.5 runden (Tricks werden gestanden → immer 180°-Schritte)
+    rotations = round(round(total_deg / 360 * 2) / 2, 1)
+
+    return {
+        "rotations": rotations,
+        "direction": direction,
+        "total_deg": round(total_deg, 1),
+    }
+
+
+# Bias-Korrektur aus Validierungsmessungen (Magglingen 2026-01-28, Cyril + Nils)
+# Formel: KMP_korrigiert = slope * IMU_peak_g + intercept
+# Bauch: Regression KMP~IMU, Sensor b1, Cyril n=60 (r=0.61, p<0.001);
+# kein proportionaler Bias (r=0.094, p=0.476) → lineare Korrektur zulässig.
+# Fuss Re/Li: keine signifikante Korrelation (p>0.05) → keine Korrektur
+_BIAS_CORRECTION = {
+    "Bauch":       {"slope": 0.4323, "intercept": 3.9842},
+}
+
+
+# Plausibilität für die Auswertung (alle Sprünge werden angezeigt, nur plausible ausgewertet).
+# Abgeleitet aus Corvatsch 22.04.2026: Kicker-Sprünge fliegen ≥ 1.4 s; kürzere Ereignisse lagen per GPS
+# an einer Welle unterhalb der drei Kicker. Pro Run gibt es höchstens 3 Kicker → Sprünge 4+ ausschliessen.
+PLAUS_MIN_FLIGHT_S = 1.4
+PLAUS_MAX_PER_RUN = 3
+
+
+def mark_plausible(jumps_df: pd.DataFrame, max_per_run: int | None = PLAUS_MAX_PER_RUN,
+                   min_flight_s: float = PLAUS_MIN_FLIGHT_S) -> pd.DataFrame:
+    """Setzt 'plausible' (bool) und 'exclusion_reason' pro Sprung; Reihenfolge = zeitlich im Run."""
+    if jumps_df is None or jumps_df.empty:
+        return jumps_df
+    df = jumps_df.copy()
+    order = df.sort_values("landing_idx").index
+    reasons, n_ok = {}, 0
+    for i in order:
+        if float(df.at[i, "flight_time_s"]) < min_flight_s:
+            reasons[i] = f"Flugzeit < {min_flight_s:.1f} s"
+        elif max_per_run is not None and n_ok >= max_per_run:
+            reasons[i] = f"mehr als {max_per_run} Sprünge im Run"
+        else:
+            reasons[i] = ""; n_ok += 1
+    df["exclusion_reason"] = [reasons[i] for i in df.index]
+    df["plausible"] = df["exclusion_reason"] == ""
+    return df
+
+
+def apply_bias_correction(peak_g: float, position_label: str) -> float:
+    """Wendet positionsspezifische Bias-Korrektur an (Validierung vs. Kraftmessplatte)."""
+    corr = _BIAS_CORRECTION.get(position_label)
+    if corr is None:
+        return peak_g
+    return corr["slope"] * peak_g + corr["intercept"]
+
+
+def compute_landing_params(df_raw: pd.DataFrame, jumps_df: pd.DataFrame,
+                           position_label: str = "") -> pd.DataFrame:
+    """Fügt Time to Peak, RFD, Impuls und Netto-Landeimpuls 0–0.25 s zu jedem Sprung hinzu."""
+    df = df_raw.copy()
+    if "accRes [g]" not in df.columns:
+        df = preprocess_imu(df)
+
+    trapz = getattr(np, "trapezoid", getattr(np, "trapz", None))
+    rows = []
+
+    for _, row in jumps_df.iterrows():
+        landing_idx = int(row["landing_idx"])
+        peak_idx = int(row["peak_res_idx"])
+
+        delta_t = (peak_idx - landing_idx) / SAMPLE_RATE
+        acc_at_land = float(df["accRes [g]"].iloc[landing_idx])
+        peak_g = float(row["peak_res_g"])
+
+        rfd = (peak_g - acc_at_land) / delta_t if delta_t > 0 else 0.0
+        impulse = float(trapz(df["accRes [g]"].iloc[landing_idx:peak_idx + 1], dx=1 / SAMPLE_RATE))
+        impulse_net = float(trapz(df["accRes [g]"].iloc[landing_idx:peak_idx + 1] - 1.0, dx=1 / SAMPLE_RATE))
+        # Netto-Landeimpuls über fixes Fenster 0–0.25 s ab Landung (validiert mit Kraftmessplatte)
+        win = df["accRes [g]"].iloc[landing_idx:landing_idx + LANDING_WINDOW_N]
+        landing_impulse_025 = (float(trapz(win - 1.0, dx=1 / SAMPLE_RATE))
+                               if len(win) == LANDING_WINDOW_N else float("nan"))
+        clipped = bool((df["accRes [g]"].iloc[landing_idx:peak_idx + 1] >= 15.5).any())
+
+        rot = compute_rotation(df, int(row["takeoff_idx"]), landing_idx)
+
+        peak_g_raw = peak_g
+        peak_g_corrected = apply_bias_correction(peak_g, position_label)
+
+        rows.append({
+            **row.to_dict(),
+            "peak_res_g_raw": round(peak_g_raw, 4),
+            "peak_res_g": round(peak_g_corrected, 4),
+            "time_to_peak_s": round(delta_t, 4),
+            "rfd_g_per_s": round(rfd, 2),
+            "impulse_g_s": round(impulse, 4),
+            "impulse_net_g_s": round(impulse_net, 4),
+            "landing_impulse_025_g_s": round(landing_impulse_025, 4),
+            "clipped_16g": clipped,
+            "landing_type": row.get("landing_type", ""),
+            "rotations": rot["rotations"],
+            "rotation_dir": rot["direction"],
+            "rotation_deg": rot["total_deg"],
+        })
+
+    return pd.DataFrame(rows)
+
+
+def session_summary(jumps_df: pd.DataFrame) -> dict:
+    if jumps_df is None or jumps_df.empty:
+        return {}
+    peaks = jumps_df["peak_res_g"].values
+    flights = jumps_df["flight_time_s"].values
+    clipped = int(jumps_df.get("clipped_16g", pd.Series([False] * len(jumps_df))).sum())
+    return {
+        "Anzahl Sprünge": len(jumps_df),
+        "Max. Flugzeit (s)": round(float(np.max(flights)), 3),
+        "Ø Flugzeit (s)": round(float(np.mean(flights)), 3),
+        "Max. Peak-g": round(float(np.max(peaks)), 2),
+        "Ø Peak-g": round(float(np.mean(peaks)), 2),
+        "Geclippt (16g)": clipped,
+    }
