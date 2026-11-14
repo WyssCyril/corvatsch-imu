@@ -189,6 +189,10 @@ div[data-testid="stRadio"] label[data-testid="stRadioOption"] p { color: inherit
 
 # ── Navigation ─────────────────────────────────────────────────────────────
 # Data comes from the repo (data/<session>/*.parquet), prepared with tools/build_park_data.py.
+from utils.auth import require_login
+
+require_login()
+
 from pages import park_app
 
 
