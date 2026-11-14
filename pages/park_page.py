@@ -13,17 +13,18 @@ import streamlit as st
 
 # Larger text in all charts. Streamlit's chart theme overrides the template, so sizes are set on every figure.
 from streamlit.delta_generator import DeltaGenerator as _DG
+from utils import brand
 
-SS_RED = "#E3001B"
-INK = "#2b2b2b"
-MUTED = "#8a8a8a"
-GREY = "#a8a19c"
+SS_RED = "#E2001A"
+INK = "#3E3E3E"
+MUTED = "#9E9E9E"
+GREY = "#9E9E9E"
 _orig_plotly_chart = _DG.plotly_chart
 
 
 def _plotly_chart_large(self, fig, *args, **kwargs):
     if isinstance(fig, go.Figure):
-        fig.update_layout(font=dict(size=14, family="Inter, Source Sans Pro, sans-serif", color=INK),
+        fig.update_layout(font=dict(size=14, family="Cera Pro, Helvetica Neue, Arial, sans-serif", color=INK),
                           legend=dict(font=dict(size=14)), title_font=dict(size=16))
         fig.update_xaxes(tickfont=dict(size=15), title_font=dict(size=14))
         fig.update_yaxes(tickfont=dict(size=14), title_font=dict(size=14))
@@ -101,7 +102,7 @@ def _run_plot(ts: pd.DataFrame, gps: pd.DataFrame, h: pd.DataFrame) -> go.Figure
     for _, x in h.iterrows():
         for r in (1, 2):
             fig.add_vrect(x0=float(x["t_run_s"]), x1=float(x["t_run_s"] + x["Airtime_s"]),
-                          fillcolor="#9ec5e8" if x["Plausibel"] else "#dddddd",
+                          fillcolor="#39C3D4" if x["Plausibel"] else "#dddddd",
                           opacity=0.35, line_width=0, layer="below", row=r, col=1)
     fig.update_layout(template="plotly_white", height=520, showlegend=True, margin=dict(l=10, r=10, t=40, b=10),
                       legend=dict(orientation="h", y=1.08, x=1, xanchor="right"))
@@ -111,7 +112,7 @@ def _run_plot(ts: pd.DataFrame, gps: pd.DataFrame, h: pd.DataFrame) -> go.Figure
 
 def _run_map(gps: pd.DataFrame, h: pd.DataFrame) -> go.Figure:
     tr = [go.Scattermap(lat=gps["lat"], lon=gps["lon"], mode="markers",
-                        marker=dict(size=6, color=gps["speed_kmh"], colorscale="Turbo", cmin=0,
+                        marker=dict(size=6, color=gps["speed_kmh"], colorscale=brand.SCALE_SPEED, cmin=0,
                                     cmax=max(40, float(gps["speed_kmh"].max())),
                                     colorbar=dict(title="km/h", thickness=12, x=0.98)),
                         name="Track", hovertemplate="%{marker.color:.1f} km/h<extra></extra>")]
@@ -153,7 +154,7 @@ def _gnss_day(day: str, athletes: list[str]):
         st.info("No valid GPS points in this time window.")
         return
     tr = [go.Scattermap(lat=ok["lat"], lon=ok["lon"], mode="markers",
-                        marker=dict(size=5, color=ok["speed_kmh"], colorscale="Turbo", cmin=0,
+                        marker=dict(size=5, color=ok["speed_kmh"], colorscale=brand.SCALE_SPEED, cmin=0,
                                     cmax=max(40, float(ok["speed_kmh"].quantile(0.995))),
                                     colorbar=dict(title="km/h", thickness=12, x=0.98)),
                         text=ok["Zeit"], name="GPS", hovertemplate="%{text} · %{marker.color:.1f} km/h<extra></extra>")]
@@ -190,7 +191,7 @@ def _jumps_map(day: str, jumps: pd.DataFrame, sel: list, col: str, colour: str):
             tr.append(go.Scattermap(lat=d["lat"], lon=d["lon"], mode="markers", marker=dict(size=3, opacity=0.5),
                                     name=a, hovertemplate=a + " · %{text}<extra></extra>", text=d["Zeit"]))
     tr.append(go.Scattermap(lat=hp["Lat"], lon=hp["Lon"], mode="markers",
-                            marker=dict(size=10, color=hp[col], colorscale="Reds" if col == "Peak_g" else "Turbo",
+                            marker=dict(size=10, color=hp[col], colorscale=brand.SCALE_RED if col == "Peak_g" else brand.SCALE_SPEED,
                                         colorbar=dict(title=colour, thickness=12, x=0.98), opacity=0.9),
                             name="Jumps", text=hp["Athlet"] + " · " + hp["Run"] + " · " + pd.Series(_jump_label(hp), index=hp.index),
                             customdata=np.c_[hp["Peak_g"], hp["Airtime_s"], hp["Speed_kmh"]],
