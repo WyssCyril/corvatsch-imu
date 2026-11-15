@@ -12,6 +12,7 @@ Masterarbeit, MA-Dashboard und Halfpipe-Dashboard werden nicht verändert.
 
 ## Neuen Messtag aufbereiten
 
+    python tools/build_park_data.py "<Tagesordner mit FS/ und SNB/>" data/YYYYMMDD_Ort   # Sportart aus dem Unterordner
     python tools/build_park_data.py "<Ordner mit CSVs>" data/YYYYMMDD_Ort --sport Freeski   # oder Snowboard
 
 Dateinamen: `<Ort>_<Athlet>_<Sensor>_<YYYY-MM-DD>_imuData.csv` / `_gnssData.csv`

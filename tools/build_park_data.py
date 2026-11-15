@@ -14,6 +14,7 @@ The thesis data and dashboards are not touched; utils/sensor_lib.py and utils/ju
 Usage:
     python tools/build_park_data.py <folder with CSVs> data/YYYYMMDD_Ort --sport Freeski|Snowboard
     python tools/build_park_data.py <folder with CSVs> data/YYYYMMDD_Ort --sport-map sports.csv   (Athlet,Sport)
+    python tools/build_park_data.py <day folder with FS/ and SNB/> data/YYYYMMDD_Ort           (sport from subfolder)
 Freeski and snowboard of the same day go into the same folder: athletes processed in a later call
 replace only their own rows, all other athletes stay (the output is merged).
 File names: <Ort>_<Athlet>_<NN>_<YYYY-MM-DD>_imuData.csv / _gnssData.csv (NN = sensor number, optional).
@@ -84,11 +85,22 @@ def main():
             sys.exit(f"No sport for {ath}: add it to --sport-map or pass --sport")
         return sp
 
-    files = {}
-    for f in sorted(glob.glob(os.path.join(args.src, "*Data.csv"))):
-        m = NAME.match(os.path.basename(f))
-        if m:
-            files.setdefault(m.group("ath"), {})[m.group("kind")] = (f, m.group("sensor"))
+    # Day folder with FS/ (freeski) and SNB/ (snowboard) subfolders: the subfolder sets the sport.
+    # The ASI/ subfolders hold the raw sensor files and are not read.
+    sub = {"FS": "Freeski", "SNB": "Snowboard"}
+    sources = [(os.path.join(args.src, d), sp) for d, sp in sub.items() if os.path.isdir(os.path.join(args.src, d))]
+    if not sources:
+        sources = [(args.src, None)]
+    files, folder_sport = {}, {}
+    for src, sp in sources:
+        for f in sorted(glob.glob(os.path.join(src, "*Data.csv"))):
+            m = NAME.match(os.path.basename(f))
+            if m:
+                files.setdefault(m.group("ath"), {})[m.group("kind")] = (f, m.group("sensor"))
+                if sp:
+                    folder_sport[ALIASES.get(m.group("ath"), m.group("ath"))] = sp
+    for ath, sp in folder_sport.items():
+        sports.setdefault(ath, sp)  # --sport-map wins over the folder
 
     out = {k: [] for k in ("jumps", "runs", "imu_runs", "gps_runs", "gps_track", "qc")}
     done = []
