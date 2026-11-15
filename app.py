@@ -169,6 +169,13 @@ div[data-testid="stRadio"] label[data-testid="stRadioOption"] p { color: inherit
 [data-testid="stButtonGroup"] button[aria-pressed="true"] p { color: white !important; }
 [data-testid="stButtonGroup"] button[aria-pressed="false"] { opacity: 0.75; }
 
+/* Discipline switch at the top (Freeski / Snowboard) */
+.st-key-sport { margin: 6px 0 4px 0; }
+.st-key-sport button { font-size: 1.05rem !important; font-weight: 700 !important; letter-spacing: .06em;
+    text-transform: uppercase; padding: 10px 28px !important; }
+.st-key-sport button[kind="segmented_controlActive"], .st-key-sport button[aria-checked="true"] {
+    background: #E2001A !important; border-color: #E2001A !important; color: #FFFFFF !important; }
+
 /* Metrics: red accent line */
 [data-testid="stMetric"] {
     border-left: 3px solid var(--ss-red);
@@ -180,7 +187,7 @@ div[data-testid="stRadio"] label[data-testid="stRadioOption"] p { color: inherit
   <div class="swiss-header-inner">
     <div>
       <h1>Park Impact Measurement<span class="dot">.</span></h1>
-      <div class="subtitle">Kicker jumps and landing load · Swiss Freeski Park &amp; Pipe · Corvatsch · Season 2026/27</div>
+      <div class="subtitle">Kicker jumps and landing load · Slopestyle Freeski &amp; Snowboard · Corvatsch · Season 2026/27</div>
     </div>
     <img src="__SS_LOGO__" alt="Swiss-Ski">
   </div>
@@ -206,8 +213,14 @@ def _safe_show(fn, *args, **kwargs):
 
 PAGES = {"Team": park_app.page_team, "Overview": park_app.page_overview, "Athlete": park_app.page_athlete,
          "Compare": park_app.page_compare, "Park & GPS": park_app.page_park, "Method": park_app.page_method}
+# Discipline at the very top: everything below shows only this sport.
+if st.session_state.get("sport") not in park_app.SPORTS:
+    st.session_state["sport"] = st.session_state.get("_sport_last", park_app.SPORTS[0])
+st.session_state["_sport_last"] = st.session_state["sport"]
+sport = st.segmented_control("Discipline", park_app.SPORTS, key="sport", label_visibility="collapsed")
+sport = sport or st.session_state["_sport_last"]
 tab = st.radio("Section", list(PAGES), horizontal=True, key="active_tab", label_visibility="collapsed")
-F = park_app.filters()
+F = park_app.filters(sport)
 if F is not None:
     st.divider()
     _safe_show(PAGES[tab], F)

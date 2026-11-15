@@ -12,7 +12,10 @@ Sessions, runs and jumps are recorded with the SAME method as in the master thes
 The thesis data and dashboards are not touched; utils/sensor_lib.py and utils/jump_detector.py are copies.
 
 Usage:
-    python tools/build_park_data.py <folder with CSVs> data/YYYYMMDD_Ort [--sensors sensors.csv]
+    python tools/build_park_data.py <folder with CSVs> data/YYYYMMDD_Ort --sport Freeski|Snowboard
+    python tools/build_park_data.py <folder with CSVs> data/YYYYMMDD_Ort --sport-map sports.csv   (Athlet,Sport)
+Freeski and snowboard of the same day go into the same folder: athletes processed in a later call
+replace only their own rows, all other athletes stay (the output is merged).
 File names: <Ort>_<Athlet>_<NN>_<YYYY-MM-DD>_imuData.csv / _gnssData.csv (NN = sensor number, optional).
 """
 import argparse
@@ -61,8 +64,25 @@ def main():
     ap.add_argument("src", help="folder with *_imuData.csv / *_gnssData.csv")
     ap.add_argument("out", help="target folder, e.g. data/20261114_Corvatsch")
     ap.add_argument("--only", nargs="*", help="only these athletes (file names)")
+    ap.add_argument("--sport", choices=["Freeski", "Snowboard"],
+                    help="discipline of all athletes in this call (default for athletes missing in --sport-map)")
+    ap.add_argument("--sport-map", help="CSV with columns Athlet,Sport (dashboard names, e.g. Juan,Freeski)")
     args = ap.parse_args()
     os.makedirs(args.out, exist_ok=True)
+
+    sports = {}
+    if args.sport_map:
+        m = pd.read_csv(args.sport_map)
+        sports = dict(zip(m["Athlet"].astype(str).str.strip(), m["Sport"].astype(str).str.strip()))
+        bad = sorted(set(sports.values()) - {"Freeski", "Snowboard"})
+        if bad:
+            sys.exit(f"--sport-map: unknown sport {bad} (allowed: Freeski, Snowboard)")
+
+    def sport_of(ath: str) -> str:
+        sp = sports.get(ath, args.sport)
+        if sp is None:
+            sys.exit(f"No sport for {ath}: add it to --sport-map or pass --sport")
+        return sp
 
     files = {}
     for f in sorted(glob.glob(os.path.join(args.src, "*Data.csv"))):
@@ -71,6 +91,7 @@ def main():
             files.setdefault(m.group("ath"), {})[m.group("kind")] = (f, m.group("sensor"))
 
     out = {k: [] for k in ("jumps", "runs", "imu_runs", "gps_runs", "gps_track", "qc")}
+    done = []
     for ath_file, ff in files.items():
         if args.only and ath_file not in args.only:
             continue
@@ -81,12 +102,21 @@ def main():
         sensor = ff["imu"][1]
         sensor = int(sensor) if sensor else None
         process(ath, sensor, ff["imu"][0], ff["gnss"][0], out)
+        done.append(ath)
 
     for k, parts in out.items():
         if not parts:
             continue
         df = pd.DataFrame(parts) if isinstance(parts[0], dict) else pd.concat(parts, ignore_index=True)
-        df.to_parquet(os.path.join(args.out, f"{k}.parquet"), index=False, compression="zstd")
+        if k in ("jumps", "runs", "qc", "gps_track"):
+            df.insert(1, "Sport", df["Athlet"].map(sport_of))
+        path = os.path.join(args.out, f"{k}.parquet")
+        if os.path.exists(path):  # merge: keep other athletes, replace the ones processed now
+            old = pd.read_parquet(path)
+            if k in ("jumps", "runs", "qc", "gps_track") and "Sport" not in old.columns:
+                old.insert(1, "Sport", "Freeski")
+            df = pd.concat([old[~old["Athlet"].isin(done)], df], ignore_index=True)
+        df.to_parquet(path, index=False, compression="zstd")
     print(f"written to {args.out}")
 
 

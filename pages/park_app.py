@@ -12,7 +12,7 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import streamlit as st
 
-from pages.park_page import (SS_RED, INK, GREY, _days, _load, _day_label, _run_plot, _run_map, _gnss_day,
+from pages.park_page import (SS_RED, INK, GREY, SPORTS, _days_for, _load, _day_label, _run_plot, _run_map, _gnss_day,
                              _jumps_map, _quality, _jump_label)
 from utils import brand
 
@@ -54,7 +54,7 @@ def _table(df: pd.DataFrame, key: str, column_config: dict, height: int | None =
 # ── Data & filter ──────────────────────────────────────────────────────────
 
 @st.cache_data(show_spinner=False)
-def _days_data(days: tuple) -> tuple[pd.DataFrame, pd.DataFrame]:
+def _days_data(days: tuple, sport: str) -> tuple[pd.DataFrame, pd.DataFrame]:
     jumps, runs = [], []
     for d in days:
         jumps.append(_load(d, "jumps").assign(Tag=d))
@@ -62,18 +62,24 @@ def _days_data(days: tuple) -> tuple[pd.DataFrame, pd.DataFrame]:
     if not jumps:
         return pd.DataFrame(), pd.DataFrame()
     j, r = pd.concat(jumps, ignore_index=True), pd.concat(runs, ignore_index=True)
+    j, r = j[j["Sport"] == sport].reset_index(drop=True), r[r["Sport"] == sport].reset_index(drop=True)
     j["KickerLabel"] = [f"K{int(k)}" if pd.notna(k) else "–" for k in j["Kicker"]]
     for df in (j, r):
         df["Messtag"] = df["Tag"].map(_day_label)
     return j, r
 
 
-def filters() -> dict | None:
-    """Global filter at the top of every page. Returns the filtered data."""
-    days = _days()
+def filters(sport: str) -> dict | None:
+    """Global filter at the top of every page (within the chosen sport). Returns the filtered data."""
+    days = _days_for(sport)
     if not days:
-        st.info("No processed park data in the repo yet (folder data/).")
+        st.info(f"No {sport.lower()} sessions in the dashboard yet.")
         return None
+    # the session list depends on the sport: reset the selection when the sport changes
+    if st.session_state.get("_f_sport") != sport:
+        st.session_state["_f_sport"] = sport
+        st.session_state["f_days"] = days
+        st.session_state.pop("f_ath", None)
     if "f_days" not in st.session_state:
         st.session_state["f_days"] = days
     st.session_state["f_days"] = [d for d in st.session_state["f_days"] if d in days]
@@ -86,7 +92,7 @@ def filters() -> dict | None:
     only_k = c3.toggle("Kicker jumps only", value=True, key="f_kicker",
                        help="Kicker jump = flight time ≥ 1.4 s, max. 3 per run (method of the master thesis). "
                             "Switch off to count all detected jumps (e.g. shorter jumps on rollers).")
-    jumps_all, runs_all = _days_data(tuple(sorted(sel_days or [])))
+    jumps_all, runs_all = _days_data(tuple(sorted(sel_days or [])), sport)
     athletes = sorted(runs_all["Athlet"].unique()) if len(runs_all) else []
     if "f_ath" not in st.session_state:
         st.session_state["f_ath"] = athletes
@@ -102,7 +108,8 @@ def filters() -> dict | None:
     jumps = jumps_all[jumps_all["Athlet"].isin(sel_ath)]
     runs = runs_all[runs_all["Athlet"].isin(sel_ath)]
     jumps_f = jumps[jumps["Plausibel"]] if only_k else jumps
-    return dict(days=sorted(sel_days), athletes=sel_ath, jumps=jumps, jumps_f=jumps_f, runs=runs, only_k=only_k)
+    return dict(days=sorted(sel_days), athletes=sel_ath, jumps=jumps, jumps_f=jumps_f, runs=runs, only_k=only_k,
+                sport=sport)
 
 
 def _metric_rows(items: list[tuple[str, str]], per_row: int = 5):
@@ -500,6 +507,8 @@ def page_method(F: dict):
 Sessions, runs and jumps are recorded with **the same method as in the master thesis** (freeski-imu).
 The thesis data and its dashboard are not changed; this dashboard only reuses the method.
 
+- **Freeski and snowboard** are evaluated with exactly the same method and shown separately
+  (choose the discipline at the top). Thresholds are not yet adapted to snowboard.
 - **Sensor** at the hip (IMU 200 Hz, GNSS 10 Hz), AdMos sensors as in the freeski project.
 - **Sessions**: a new session starts when the sensor clock is reset (sensor restarted).
 - **Runs** from GNSS per session: a run starts at > 7 m/s going downhill, pauses below 1.5 m/s and ends when
@@ -516,4 +525,4 @@ The thesis data and its dashboard are not changed; this dashboard only reuses th
 """)
     for d in F["days"][::-1]:
         st.markdown(f"**Data quality {_day_label(d)}**")
-        _quality(d)
+        _quality(d, F["sport"])

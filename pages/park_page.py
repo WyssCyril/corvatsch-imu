@@ -48,9 +48,21 @@ def _days() -> list[str]:
                    if os.path.exists(os.path.join(DATA_ROOT, d, "jumps.parquet"))], reverse=True)
 
 
+SPORTS = ["Freeski", "Snowboard"]
+SPORT_TABLES = ("jumps", "runs", "qc", "gps_track")
+
+
 @st.cache_data(show_spinner=False)
 def _load(day: str, name: str) -> pd.DataFrame:
-    return pd.read_parquet(os.path.join(DATA_ROOT, day, f"{name}.parquet"))
+    df = pd.read_parquet(os.path.join(DATA_ROOT, day, f"{name}.parquet"))
+    if name in SPORT_TABLES and "Sport" not in df.columns:
+        df["Sport"] = "Freeski"  # sessions processed before the sport column existed were freeski
+    return df
+
+
+def _days_for(sport: str) -> list[str]:
+    """Sessions that contain data of the given sport (newest first)."""
+    return [d for d in _days() if (_load(d, "runs")["Sport"] == sport).any()]
 
 
 def _day_label(day: str) -> str:
@@ -202,8 +214,9 @@ def _jumps_map(day: str, jumps: pd.DataFrame, sel: list, col: str, colour: str):
     st.plotly_chart(fig, width="stretch", config={"scrollZoom": True})
 
 
-def _quality(day: str):
-    st.dataframe(_load(day, "qc"), hide_index=True, width="stretch",
+def _quality(day: str, sport: str):
+    qc = _load(day, "qc")
+    st.dataframe(qc[qc["Sport"] == sport].drop(columns="Sport"), hide_index=True, width="stretch",
                  column_config={"Athlet": "Athlete", "Sprünge_in_Runs": "Jumps detected in runs",
                                 "Kicker": "Kicker jumps (plausible)", "GPS_Punkte": "GPS points",
                                 "GPS_gefiltert": "GPS points removed", "GPS_gefiltert_pct": "removed (%)"})
