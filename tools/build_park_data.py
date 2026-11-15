@@ -113,6 +113,10 @@ def main():
         ath = ALIASES.get(ath_file, ath_file)
         sensor = ff["imu"][1]
         sensor = int(sensor) if sensor else None
+        problem = gnss_problem(ff["gnss"][0])
+        if problem:  # runs need GNSS (thesis method) – no guessing without it
+            print(f"{ath}: skipped – {problem}")
+            continue
         process(ath, sensor, ff["imu"][0], ff["gnss"][0], out)
         done.append(ath)
 
@@ -130,6 +134,22 @@ def main():
             df = pd.concat([old[~old["Athlet"].isin(done)], df], ignore_index=True)
         df.to_parquet(path, index=False, compression="zstd")
     print(f"written to {args.out}")
+
+
+GNSS_COLS = ["time [POSIXms]", "timestamp [us]", "latitude [deg]", "longitude [deg]",
+             "speedN [m/s]", "speedE [m/s]", "speedD [m/s]", "altitude [m]"]
+
+
+def gnss_problem(f_gnss) -> str | None:
+    """Reason why a GNSS file cannot be used, or None."""
+    head = pd.read_csv(f_gnss, nrows=2000)
+    missing = [c for c in GNSS_COLS if c not in head.columns]
+    if missing:
+        return f"GNSS file without {', '.join(missing)} (no GPS fix recorded?)"
+    full = pd.read_csv(f_gnss, usecols=["time [POSIXms]", "latitude [deg]"])
+    if not ((full["time [POSIXms]"] > 1.7e12) & (full["latitude [deg]"] != 0)).any():
+        return "GNSS file has no valid position"
+    return None
 
 
 def process(ath, sensor, f_imu, f_gnss, out):
