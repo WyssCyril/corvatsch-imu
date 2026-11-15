@@ -12,7 +12,11 @@ Sessions, runs and jumps are recorded with the SAME method as in the master thes
 The thesis data and dashboards are not touched; utils/sensor_lib.py and utils/jump_detector.py are copies.
 
 Usage:
-    python tools/build_park_data.py <folder with CSVs> data/YYYYMMDD_Ort [--sensors sensors.csv]
+    python tools/build_park_data.py <folder with CSVs> data/YYYYMMDD_Ort --sport Freeski|Snowboard
+    python tools/build_park_data.py <folder with CSVs> data/YYYYMMDD_Ort --sport-map sports.csv   (Athlet,Sport)
+    python tools/build_park_data.py <day folder with FS/ and SNB/> data/YYYYMMDD_Ort           (sport from subfolder)
+Freeski and snowboard of the same day go into the same folder: athletes processed in a later call
+replace only their own rows, all other athletes stay (the output is merged).
 File names: <Ort>_<Athlet>_<NN>_<YYYY-MM-DD>_imuData.csv / _gnssData.csv (NN = sensor number, optional).
 """
 import argparse
@@ -61,16 +65,45 @@ def main():
     ap.add_argument("src", help="folder with *_imuData.csv / *_gnssData.csv")
     ap.add_argument("out", help="target folder, e.g. data/20261114_Corvatsch")
     ap.add_argument("--only", nargs="*", help="only these athletes (file names)")
+    ap.add_argument("--sport", choices=["Freeski", "Snowboard"],
+                    help="discipline of all athletes in this call (default for athletes missing in --sport-map)")
+    ap.add_argument("--sport-map", help="CSV with columns Athlet,Sport (dashboard names, e.g. Juan,Freeski)")
     args = ap.parse_args()
     os.makedirs(args.out, exist_ok=True)
 
-    files = {}
-    for f in sorted(glob.glob(os.path.join(args.src, "*Data.csv"))):
-        m = NAME.match(os.path.basename(f))
-        if m:
-            files.setdefault(m.group("ath"), {})[m.group("kind")] = (f, m.group("sensor"))
+    sports = {}
+    if args.sport_map:
+        m = pd.read_csv(args.sport_map)
+        sports = dict(zip(m["Athlet"].astype(str).str.strip(), m["Sport"].astype(str).str.strip()))
+        bad = sorted(set(sports.values()) - {"Freeski", "Snowboard"})
+        if bad:
+            sys.exit(f"--sport-map: unknown sport {bad} (allowed: Freeski, Snowboard)")
+
+    def sport_of(ath: str) -> str:
+        sp = sports.get(ath, args.sport)
+        if sp is None:
+            sys.exit(f"No sport for {ath}: add it to --sport-map or pass --sport")
+        return sp
+
+    # Day folder with FS/ (freeski) and SNB/ (snowboard) subfolders: the subfolder sets the sport.
+    # The ASI/ subfolders hold the raw sensor files and are not read.
+    sub = {"FS": "Freeski", "SNB": "Snowboard"}
+    sources = [(os.path.join(args.src, d), sp) for d, sp in sub.items() if os.path.isdir(os.path.join(args.src, d))]
+    if not sources:
+        sources = [(args.src, None)]
+    files, folder_sport = {}, {}
+    for src, sp in sources:
+        for f in sorted(glob.glob(os.path.join(src, "*Data.csv"))):
+            m = NAME.match(os.path.basename(f))
+            if m:
+                files.setdefault(m.group("ath"), {})[m.group("kind")] = (f, m.group("sensor"))
+                if sp:
+                    folder_sport[ALIASES.get(m.group("ath"), m.group("ath"))] = sp
+    for ath, sp in folder_sport.items():
+        sports.setdefault(ath, sp)  # --sport-map wins over the folder
 
     out = {k: [] for k in ("jumps", "runs", "imu_runs", "gps_runs", "gps_track", "qc")}
+    done = []
     for ath_file, ff in files.items():
         if args.only and ath_file not in args.only:
             continue
@@ -80,14 +113,43 @@ def main():
         ath = ALIASES.get(ath_file, ath_file)
         sensor = ff["imu"][1]
         sensor = int(sensor) if sensor else None
+        problem = gnss_problem(ff["gnss"][0])
+        if problem:  # runs need GNSS (thesis method) – no guessing without it
+            print(f"{ath}: skipped – {problem}")
+            continue
         process(ath, sensor, ff["imu"][0], ff["gnss"][0], out)
+        done.append(ath)
 
     for k, parts in out.items():
         if not parts:
             continue
         df = pd.DataFrame(parts) if isinstance(parts[0], dict) else pd.concat(parts, ignore_index=True)
-        df.to_parquet(os.path.join(args.out, f"{k}.parquet"), index=False, compression="zstd")
+        if k in ("jumps", "runs", "qc", "gps_track"):
+            df.insert(1, "Sport", df["Athlet"].map(sport_of))
+        path = os.path.join(args.out, f"{k}.parquet")
+        if os.path.exists(path):  # merge: keep other athletes, replace the ones processed now
+            old = pd.read_parquet(path)
+            if k in ("jumps", "runs", "qc", "gps_track") and "Sport" not in old.columns:
+                old.insert(1, "Sport", "Freeski")
+            df = pd.concat([old[~old["Athlet"].isin(done)], df], ignore_index=True)
+        df.to_parquet(path, index=False, compression="zstd")
     print(f"written to {args.out}")
+
+
+GNSS_COLS = ["time [POSIXms]", "timestamp [us]", "latitude [deg]", "longitude [deg]",
+             "speedN [m/s]", "speedE [m/s]", "speedD [m/s]", "altitude [m]"]
+
+
+def gnss_problem(f_gnss) -> str | None:
+    """Reason why a GNSS file cannot be used, or None."""
+    head = pd.read_csv(f_gnss, nrows=2000)
+    missing = [c for c in GNSS_COLS if c not in head.columns]
+    if missing:
+        return f"GNSS file without {', '.join(missing)} (no GPS fix recorded?)"
+    full = pd.read_csv(f_gnss, usecols=["time [POSIXms]", "latitude [deg]"])
+    if not ((full["time [POSIXms]"] > 1.7e12) & (full["latitude [deg]"] != 0)).any():
+        return "GNSS file has no valid position"
+    return None
 
 
 def process(ath, sensor, f_imu, f_gnss, out):
