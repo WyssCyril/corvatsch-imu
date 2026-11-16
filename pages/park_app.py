@@ -53,6 +53,62 @@ def _table(df: pd.DataFrame, key: str, column_config: dict, height: int | None =
 
 # ── Data & filter ──────────────────────────────────────────────────────────
 
+# ── Unusual jumps: everything stays in the data, these jumps are only marked red ──
+FLAG_IMPULSE_X = 1.8     # landing impulse ≥ 1.8 × the athlete's median of that session ...
+FLAG_SHORT_S = 0.25      # ... and airtime ≥ 0.25 s shorter than the athlete's median on that kicker
+FLAG_LONG_AIR_S = 2.6    # airtime ≥ 2.6 s ...
+FLAG_SOFT_G = 7.0        # ... with a landing peak ≤ 7 g (corr.)
+
+
+def flag_jumps(j: pd.DataFrame) -> pd.Series:
+    """Reason why a kicker jump looks unusual (empty string = normal). Per athlete and session,
+    so the result does not depend on the filter."""
+    out = pd.Series("", index=j.index, dtype=object)
+    k = j[j["Plausibel"]]
+    if k.empty:
+        return out
+    by = [k["Tag"], k["Athlet"]]
+    imp_med = k.groupby(by)["Landeimpuls_025_gs"].transform("median")
+    air_med_k = k.groupby(by + [k["Kicker"]])["Airtime_s"].transform("median")
+    hard_short = (k["Landeimpuls_025_gs"] >= FLAG_IMPULSE_X * imp_med) & (k["Airtime_s"] <= air_med_k - FLAG_SHORT_S)
+    long_soft = (k["Airtime_s"] >= FLAG_LONG_AIR_S) & (k["Peak_g"] <= FLAG_SOFT_G)
+    for i in k.index[hard_short]:
+        out[i] = (f"Short, hard landing – impulse {k.at[i, 'Landeimpuls_025_gs'] / imp_med[i]:.1f}× usual, "
+                  f"airtime {air_med_k[i] - k.at[i, 'Airtime_s']:.2f} s shorter (possible crash)")
+    for i in k.index[long_soft]:
+        out[i] = (f"Long flight ({k.at[i, 'Airtime_s']:.2f} s) with soft landing ({k.at[i, 'Peak_g']:.1f} g) "
+                  "– possible fall or missed landing")
+    return out
+
+
+CHECK_STYLE = "background-color: #FDEDEF; color: #8B0E13; font-weight: 600"
+
+
+def _style_check(df: pd.DataFrame, flag_col: str = "Check"):
+    """Rows with a check reason in red (Swiss-Ski red tint)."""
+    fmt = {c: f for c, f in {"Airtime_s": "{:.2f}", "Peak_g": "{:.1f}", "Peak_g_roh": "{:.1f}",
+                             "Landeimpuls_025_gs": "{:.2f}", "Speed_kmh": "{:.0f}",
+                             "Speed_Anfahrt_kmh": "{:.0f}"}.items() if c in df.columns}
+    return (df.style.apply(lambda r: [CHECK_STYLE if r[flag_col] else "" for _ in r], axis=1)
+            .format(fmt, na_rep="–"))
+
+
+def _check_table(jf: pd.DataFrame, key: str, with_athlete: bool = True):
+    c = jf[jf["Check"] != ""].sort_values(["Tag", "Athlet", "Run", "Sprung"])
+    st.markdown(f"#### Jumps to check ({len(c)})")
+    if c.empty:
+        st.caption("No unusual kicker jumps in the selection.")
+        return
+    cols = (["Messtag", "Athlet"] if with_athlete else ["Messtag"]) + [
+        "Run", "KickerLabel", "Zeit", "Airtime_s", "Peak_g", "Landeimpuls_025_gs", "Speed_kmh", "Check"]
+    st.dataframe(_style_check(c[cols].round(2)), hide_index=True, width="stretch", key=key,
+                 column_config={**BASE_COLS, "Airtime_s": "Airtime (s)", "Peak_g": "Landing peak (g)",
+                                "Landeimpuls_025_gs": "Landing impulse (g·s)", "Speed_kmh": "Speed (km/h)",
+                                "Check": st.column_config.TextColumn("Why to check", width="large")})
+    st.caption("Marked automatically, nothing is removed: the jumps stay in all values. "
+               "Check them with video or the coach (rules on the Method page).")
+
+
 @st.cache_data(show_spinner=False)
 def _days_data(days: tuple, sport: str) -> tuple[pd.DataFrame, pd.DataFrame]:
     jumps, runs = [], []
@@ -64,6 +120,7 @@ def _days_data(days: tuple, sport: str) -> tuple[pd.DataFrame, pd.DataFrame]:
     j, r = pd.concat(jumps, ignore_index=True), pd.concat(runs, ignore_index=True)
     j, r = j[j["Sport"] == sport].reset_index(drop=True), r[r["Sport"] == sport].reset_index(drop=True)
     j["KickerLabel"] = [f"K{int(k)}" if pd.notna(k) else "–" for k in j["Kicker"]]
+    j["Check"] = flag_jumps(j)
     for df in (j, r):
         df["Messtag"] = df["Tag"].map(_day_label)
     return j, r
@@ -230,6 +287,8 @@ CARD_CSS = """
 .tc-tile.best { background:#FDEDEF; border-color:#F5B3BB; }
 .tc-v { font-size:22px; font-weight:700; color:#3E3E3E; line-height:1.15; }
 .tc-tile.best .tc-v { color:#E2001A; }
+.tc-tile.check { border:2px dashed #8B0E13; }
+.tc-chk { font-size:10px; font-weight:700; letter-spacing:.06em; color:#8B0E13; text-transform:uppercase; }
 .tc-l { font-size:13px; color:#6E6E6E; margin-top:2px; }
 .tc-s { font-size:12px; color:#6E6E6E; margin-top:4px; }
 .tc-s b { color:#3E3E3E; }
@@ -250,6 +309,17 @@ CARD_KPIS = [  # key, label, format (higher = team best)
     ("jumps", "Kicker jumps", "{:.0f}"),
     ("runs", "Runs", "{:.0f}"),
 ]
+
+
+MAX_KEYS = {"max_g": "Peak_g", "max_imp": "Landeimpuls_025_gs", "max_air": "Airtime_s"}
+
+
+def _max_flagged(jf: pd.DataFrame) -> set:
+    """Card keys whose maximum comes from a jump marked for checking."""
+    if jf.empty:
+        return set()
+    return {key for key, col in MAX_KEYS.items()
+            if jf[col].notna().any() and jf.at[jf[col].idxmax(), "Check"] != ""}
 
 
 def _card_values(jf: pd.DataFrame, runs: pd.DataFrame) -> dict:
@@ -285,7 +355,7 @@ def page_team(F: dict):
             continue
         ja = jk[jk["Athlet"] == a]
         last = ra["Tag"].max()
-        rows[a] = dict(total=_card_values(ja, ra), last_day=last, n_days=ra["Tag"].nunique(),
+        rows[a] = dict(total=_card_values(ja, ra), last_day=last, n_days=ra["Tag"].nunique(), check=_max_flagged(ja),
                        last=_card_values(ja[ja["Tag"] == last], ra[ra["Tag"] == last]))
     if not rows:
         st.info("No runs for the selected athletes and sessions.")
@@ -315,8 +385,10 @@ def page_team(F: dict):
             is_best = len(rows) > 1 and pd.notna(v) and v == best[key]
             sub = (f'<div class="tc-s">Last session <b>{fmt.format(lv)}</b></div>'
                    if multi and r["n_days"] > 1 and pd.notna(lv) else "")
-            flag = '<div class="tc-flag">Team best</div>' if is_best else ""
-            tiles.append(f'<div class="tc-tile{" best" if is_best else ""}">{flag}'
+            chk = key in r["check"]
+            flag = ('<div class="tc-flag">Team best</div>' if is_best else "") + (
+                '<div class="tc-chk">Check – from a marked jump</div>' if chk else "")
+            tiles.append(f'<div class="tc-tile{" best" if is_best else ""}{" check" if chk else ""}">{flag}'
                          f'<div class="tc-v">{fmt.format(v) if pd.notna(v) else "–"}</div>'
                          f'<div class="tc-l">{label}</div>{sub}</div>')
         days_txt = f"{r['n_days']} session{'s' if r['n_days'] > 1 else ''}"
@@ -332,7 +404,8 @@ def page_team(F: dict):
             st.markdown("<div style='height:14px'></div>", unsafe_allow_html=True)
     st.caption(("Values over all selected sessions; «Last session» = the athlete's most recent selected session. "
                 if multi else "") + "Cards always count kicker jumps (≥ 1.4 s, max. 3 per run). Landing g "
-               "bias-corrected; when the 16 g sensor range is reached the real peak is higher. Red = team best.")
+               "bias-corrected; when the 16 g sensor range is reached the real peak is higher. Red = team best. "
+               "Dashed dark-red frame = the maximum comes from a jump marked for checking (see Overview).")
 
 
 # ── Pages ──────────────────────────────────────────────────────────────────
@@ -363,6 +436,8 @@ def page_overview(F: dict):
                                           Clip_pct=("Geclippt_16g", lambda x: 100 * x.mean())).reset_index()
         st.dataframe(k, hide_index=True, width="stretch", column_config=AGG_COLS)
         st.caption("K1–K3 = 1st to 3rd kicker jump within a run (order in the run, not a fixed kicker of the park).")
+
+    _check_table(jf, "ov_check")
 
     with st.expander(f"All runs ({len(runs)})"):
         cols = ["Messtag", "Athlet", "Run", "Start", "Dauer_s", "Hoehenverlust_m", "Sprünge", "Kicker",
@@ -407,14 +482,18 @@ def page_athlete(F: dict):
         f.update_layout(template="plotly_white", height=360, margin=dict(l=10, r=10, t=40, b=10))
         c.plotly_chart(f, width="stretch")
 
+    _check_table(jf, "pa_check", with_athlete=False)
+
     st.markdown("#### Run in detail")
     r1, r2 = st.columns([1, 3])
     day = r1.selectbox("Session", days[::-1], format_func=_day_label, key="pa_day")
     rr = runs[runs["Tag"] == day].set_index("Run")
+    flagged_runs = set(jumps.loc[(jumps["Tag"] == day) & (jumps["Check"] != ""), "Run"])
     run = r2.selectbox("Run", rr.index.tolist(), key="pa_run",
                        format_func=lambda r: f"{r} · {rr.loc[r, 'Start']} · {int(rr.loc[r, 'Kicker'])} kicker jumps"
                                              + (f" · avg. airtime {rr.loc[r, 'Airtime_mittel_s']:.2f} s"
-                                                if pd.notna(rr.loc[r, 'Airtime_mittel_s']) else ""))
+                                                if pd.notna(rr.loc[r, 'Airtime_mittel_s']) else "")
+                                             + ("  ·  CHECK" if r in flagged_runs else ""))
     _run_detail(day, ath, run, jumps[(jumps["Tag"] == day) & (jumps["Run"] == run)])
 
 
@@ -423,18 +502,19 @@ def _run_detail(day: str, ath: str, run: str, h: pd.DataFrame):
     gps = _load(day, "gps_runs"); gps = gps[(gps["Athlet"] == ath) & (gps["Run"] == run)]
     st.plotly_chart(_run_plot(ts, gps, h), width="stretch")
     st.caption("Red = kicker jump (K1–K3), grey = detected jump that does not count (reason in the table). "
-               "Blue band = flight phase.")
+               "Blue band = flight phase. Dark-red ring = jump marked for checking.")
     if len(gps):
         st.plotly_chart(_run_map(gps, h), width="stretch", config={"scrollZoom": True})
     t = h.assign(Label=_jump_label(h))
     cols = ["Label", "Zeit", "Airtime_s", "Peak_g", "Peak_g_roh", "Landeimpuls_025_gs", "Speed_kmh",
-            "Speed_Anfahrt_kmh", "Geclippt_16g", "Grund"]
-    st.dataframe(t[cols].round(2), hide_index=True, width="stretch",
+            "Speed_Anfahrt_kmh", "Geclippt_16g", "Grund", "Check"]
+    st.dataframe(_style_check(t[cols].round(2)), hide_index=True, width="stretch",
                  column_config={**BASE_COLS, "Label": "Jump", "Airtime_s": "Airtime (s)",
                                 "Peak_g": "Landing peak (g, corr.)", "Peak_g_roh": "Landing peak (g, raw)",
                                 "Landeimpuls_025_gs": "Landing impulse (g·s)", "Speed_kmh": "Speed at take-off (km/h)",
                                 "Speed_Anfahrt_kmh": "Approach speed (km/h)", "Geclippt_16g": "16 g reached",
-                                "Grund": "Not counted because"})
+                                "Grund": "Not counted because",
+                                "Check": st.column_config.TextColumn("Why to check", width="large")})
 
 
 def page_compare(F: dict):
@@ -519,6 +599,11 @@ The thesis data and its dashboard are not changed; this dashboard only reuses th
 - **Landing peak** bias-corrected for the hip sensor (0.4323 × raw + 3.98, validation Magglingen).
   **Landing impulse** = net impulse 0–0.25 s after landing (validated with force plate).
 - **Speed at take-off** = GPS speed (3D) at take-off; **approach speed** = highest GPS speed in the 5 s before.
+- **Marked for checking** (shown in dark red, nothing is removed – the jumps stay in all values):
+  1. *Short, hard landing (possible crash)*: landing impulse ≥ 1.8 × the athlete's median of that session
+     **and** airtime ≥ 0.25 s shorter than the athlete's median on that kicker.
+  2. *Long flight, soft landing (possible fall or missed landing)*: airtime ≥ 2.6 s with a landing peak ≤ 7 g.
+  Team cards show a dashed dark-red frame when an athlete's maximum comes from such a jump.
 - **Limits**: each sensor axis measures up to 16 g. Landings where an axis reaches this range are marked
   («16 g reached»); their real peak is higher than shown. GPS positions are offset by a few metres depending on the sensor.
 - Tricks are not recorded (no trick protocol), and rails are not evaluated.

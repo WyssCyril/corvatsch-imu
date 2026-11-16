@@ -108,6 +108,14 @@ def _run_plot(ts: pd.DataFrame, gps: pd.DataFrame, h: pd.DataFrame) -> go.Figure
                                  hovertemplate="%{text}<br>Peak %{customdata[0]:.1f} g (corr.)"
                                                "<br>Airtime %{customdata[1]:.2f} s<br>%{customdata[2]}<extra></extra>"),
                       row=1, col=1)
+    if len(h) and "Check" in h.columns and (h["Check"] != "").any():
+        c = h[h["Check"] != ""]
+        t_c = c["t_run_s"] + c["Airtime_s"] + c["Time_to_peak_s"].fillna(0)
+        fig.add_trace(go.Scatter(x=t_c, y=c["Peak_g_roh"], mode="markers+text", name="Check",
+                                 marker=dict(symbol="circle-open", size=26, color=brand.DARK_RED, line=dict(width=3)),
+                                 text=["CHECK"] * len(c), textposition="bottom center",
+                                 textfont=dict(color=brand.DARK_RED, size=12), customdata=c["Check"],
+                                 hovertemplate="%{customdata}<extra></extra>"), row=1, col=1)
     fig.add_trace(go.Scatter(x=gps["t_s"], y=gps["speed_kmh"], mode="lines", line=dict(color=SS_RED, width=1.6),
                              name="Speed", showlegend=False,
                              hovertemplate="%{x:.1f} s · %{y:.1f} km/h<extra></extra>"), row=2, col=1)
@@ -135,6 +143,11 @@ def _run_map(gps: pd.DataFrame, h: pd.DataFrame) -> go.Figure:
                             name="Take-off", customdata=np.c_[hp["Peak_g"], hp["Airtime_s"], hp["Speed_kmh"]],
                             hovertemplate="%{text}<br>%{customdata[0]:.1f} g · %{customdata[1]:.2f} s"
                                           "<br>%{customdata[2]:.0f} km/h<extra></extra>"))
+    if "Check" in hp.columns and (hp["Check"] != "").any():
+        c = hp[hp["Check"] != ""]
+        tr.insert(1, go.Scattermap(lat=c["Lat"], lon=c["Lon"], mode="markers", name="Check",
+                                marker=dict(size=26, color=brand.DARK_RED, opacity=0.55),
+                                customdata=c["Check"], hovertemplate="%{customdata}<extra></extra>"))
     fig = go.Figure(tr)
     fig.update_layout(**_map_layout(hp["Lat"] if len(hp) else gps["lat"], hp["Lon"] if len(hp) else gps["lon"],
                                     height=520, zoom=16.3))
